@@ -11,7 +11,7 @@ One Docker container runs FastAPI, a server-rendered web UI and the IMAP integra
 Requirements: Git, Docker Engine, and Docker Compose v2.
 
 ```bash
-git clone https://github.com/YOUR-USER/mailguard.git
+git clone https://github.com/DevNullGamer/mailguard.git
 cd mailguard
 cp .env.example .env
 python -c "import secrets; print(secrets.token_urlsafe(48))"
