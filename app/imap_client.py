@@ -1,20 +1,36 @@
-import imaplib,ssl,email,re
+import imaplib,ssl,email,re,html
 from email.header import decode_header,make_header
 from email.utils import parseaddr
 from .security import decrypt
-URL=re.compile(r'https?://[^\s<>"\']+',re.I)
+URL=re.compile(r'https?://[^\s<>"\']+',re.I);HREF=re.compile(r'href\s*=\s*["\']([^"\']+)',re.I);DISPLAY_URL=re.compile(r'https?://[^\s<>]+',re.I)
 def dec(v):
  try:return str(make_header(decode_header(v or '')))
  except:return v or ''
+def _text(part,limit=12000):
+ try:return part.get_payload(decode=True).decode(part.get_content_charset() or 'utf-8','replace')[:limit].replace('\x00','')
+ except:return ''
 def metadata(raw):
- msg=email.message_from_bytes(raw);preview='';attachments=[]
+ msg=email.message_from_bytes(raw);plain='';html_body='';attachments=[];images=0
  for p in msg.walk():
-  fn=p.get_filename()
-  if fn:attachments.append({'name':dec(fn)[:200],'type':p.get_content_type()[:100]})
-  if not preview and p.get_content_type()=='text/plain' and p.get_content_disposition()!='attachment':
-   try:preview=p.get_payload(decode=True).decode(p.get_content_charset() or 'utf-8','replace')[:500].replace('\x00','')
+  typ=p.get_content_type();fn=p.get_filename()
+  if typ.startswith('image/'):images+=1
+  if fn:attachments.append({'name':dec(fn)[:200],'type':typ[:100]})
+  if not fn and typ=='text/plain' and not plain:plain=_text(p)
+  if not fn and typ=='text/html' and not html_body:html_body=_text(p)
+ cleaned=re.sub(r'<[^>]{0,1000}>',' ',html_body);cleaned=html.unescape(re.sub(r'\s+',' ',cleaned))[:12000]
+ body=plain or cleaned;urls=(URL.findall(plain)+HREF.findall(html_body))[:100]
+ shown=DISPLAY_URL.findall(cleaned);dest={re.sub(r'^www\.','',(urlparse(u).hostname or '').lower()) for u in urls if u.lower().startswith(('http://','https://'))}
+ from urllib.parse import urlparse
+ shown_domains={re.sub(r'^www\.','',(urlparse(u).hostname or '').lower()) for u in shown}
+ mismatch=bool(shown_domains and dest and shown_domains-dest)
+ auth='; '.join(dec(msg.get_all('Authentication-Results',[])))[:4000];spam='; '.join(dec(x) for h in ('X-Spam-Status','X-Spam-Flag','X-Spam','X-Microsoft-Antispam','X-Forefront-Antispam-Report') for x in msg.get_all(h,[]))[:4000]
+ is_spam=bool(re.search(r'(^|[ ;])(yes|true|spam)([ ;]|$)',spam,re.I));up=None
+ for h in ('X-Spam-Score','X-Spam-Level'):
+  v=dec(msg.get(h));m=re.search(r'-?\d+(?:\.\d+)?',v)
+  if m:
+   try:up=float(m.group());break
    except:pass
- return {'from':dec(msg.get('From')),'sender':parseaddr(dec(msg.get('From')))[1].lower(),'sender_name':parseaddr(dec(msg.get('From')))[0],'to':dec(msg.get('To')),'subject':dec(msg.get('Subject'))[:500],'date':dec(msg.get('Date'))[:100],'message_id':dec(msg.get('Message-ID'))[:500],'reply_to':dec(msg.get('Reply-To')),'authentication_results':dec(msg.get('Authentication-Results'))[:2000],'preview':preview,'urls':URL.findall(preview)[:50],'attachments':attachments,'attachment_count':len(attachments)}
+ return {'from':dec(msg.get('From')),'sender':parseaddr(dec(msg.get('From')))[1].lower(),'sender_name':parseaddr(dec(msg.get('From')))[0],'to':dec(msg.get('To')),'subject':dec(msg.get('Subject'))[:500],'date':dec(msg.get('Date'))[:100],'message_id':dec(msg.get('Message-ID'))[:500],'reply_to':dec(msg.get('Reply-To')),'authentication_results':auth,'spam_headers':spam,'upstream_is_spam':is_spam,'upstream_spam_score':up,'preview':body[:1000],'urls':urls,'attachments':attachments,'attachment_count':len(attachments),'html_only':bool(html_body and not plain),'image_count':images,'display_link_mismatch':mismatch}
 class ImapClient:
  def __init__(self,cfg):self.cfg=cfg
  def __enter__(self):

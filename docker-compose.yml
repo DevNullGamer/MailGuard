@@ -1,11 +1,9 @@
 services:
   mailguard:
-    build:
-      context: .
+    build: .
     restart: unless-stopped
     init: true
-    ports:
-      - "${APP_PORT:-8080}:8080"
+    ports: ["${APP_PORT:-8080}:8080"]
     environment:
       TZ: ${TZ:-Europe/Copenhagen}
       DATA_DIR: /data
@@ -13,14 +11,11 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    volumes:
-      - mailguard-data:/data
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+    volumes: ["mailguard-data:/data"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      test: ["CMD","python","-c","import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3

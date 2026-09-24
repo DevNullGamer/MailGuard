@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<h1>Activity</h1><section class="card">{% for e in events %}<div class="row"><time>{{e.ts}}</time><b>{{e.level}} · {{e.event}}</b><span>{{e.detail or ''}}</span></div>{% endfor %}</section>{% endblock %}

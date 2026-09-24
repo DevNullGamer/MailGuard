@@ -1,91 +1,64 @@
-# MailGuard
+# MailGuard v2.1
+Self-hosted, human-in-the-loop IMAP spam quarantine/review. Automated classification can only move suspected mail to SpamReview. Human review is required to move it to Trash, and MailGuard never issues EXPUNGE.
 
-Self-hosted, human-in-the-loop IMAP spam quarantine and review. Automatic classification may move suspected spam to `SpamReview`, but **only human review can move messages to Trash**. MailGuard deliberately does not provide an EXPUNGE operation.
+## v2.1 changes
+- New signed, explainable hybrid classifier inspired by mature multi-signal filtering: authentication, sender identity, HTML/MIME structure, URLs, attachments, upstream spam headers, promotional/urgency/financial language and negative evidence for authentication passes.
+- Default threshold reduced from 75 to 45 because v2 scores are calibrated on a wider set of independent signals. Tune it using real scan logs.
+- Classifier versioning (`hybrid-v2.1`). Existing source-folder messages can be explicitly reclassified after an upgrade.
+- New `Scans & logs` UI with scan history, per-message classifications, scores, rule contributions, errors, and score distribution.
+- Container logs include scan ID, UID, result, score, sender, truncated subject, and triggered signal names. They never include credentials or full body text.
+- Existing SQLite databases are migrated in place. The Docker named volume is retained during normal upgrades.
 
-## Architecture
+This design adopts the useful architecture of combining many independent signals rather than copying an SMS-trained model into an email system. It leaves a clean classifier boundary for a future email-trained TF-IDF/LinearSVC, SpamAssassin, or Rspamd backend.
 
-One Docker container runs FastAPI, a server-rendered web UI and the IMAP integration. SQLite is stored in `/data` on a named Docker volume. Mail bodies are not retained in the database. The classifier is modular and the initial implementation combines authentication, identity, URL-domain and attachment signals rather than keyword-only matching.
-
-## Deploy directly from GitHub
-
-Requirements: Git, Docker Engine, and Docker Compose v2.
-
-```bash
-git clone https://github.com/DevNullGamer/mailguard.git
-cd mailguard
-cp .env.example .env
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
-
-Put the generated value into `APP_SECRET` in `.env`. Adjust `TRUSTED_HOSTS` to include the hostname or IP used to open MailGuard. Then:
-
-```bash
-docker compose up -d --build
-docker compose ps
-docker compose logs -f mailguard
-```
-
-Open `http://DOCKER-HOST:8080/setup` and create the administrator, then configure the IMAP account under Settings.
-
-### Update from GitHub
-
+## Upgrade from the previous GitHub version
+Back up the volume and your `.env` first. Then:
 ```bash
 git pull --ff-only
 docker compose up -d --build
 ```
+Do not use `docker compose down -v`.
 
-The named `mailguard-data` volume survives normal container recreation. Do **not** use `docker compose down -v` unless you intentionally want to delete the SQLite state.
+After login, open Dashboard and click **Reclassify source mailbox**. This matters for the 5,000 messages already recorded by the previous classifier. Reclassification applies only to messages that are still present in the configured source mailbox. It can quarantine newly detected spam but still cannot move anything directly to Trash.
 
-### Stop/start
+Then open **Scans & logs**, select the scan, and inspect its score distribution and individual rule contributions. This is the preferred way to tune the threshold rather than guessing.
 
+## New deployment
 ```bash
-docker compose down
-docker compose up -d
+git clone https://github.com/YOUR-USER/mailguard.git
+cd mailguard
+cp .env.example .env
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+# put the generated APP_SECRET in .env
+docker compose up -d --build
 ```
+Open `http://DOCKER-HOST:8080/setup`.
 
-## Secrets
+## Classifier approach
+The classifier is intentionally explainable. Each fired signal has a signed score. Spam-like evidence adds points and ham-like evidence can subtract points. The total is clamped to 0-100 and compared to the configured threshold. No one body keyword is sufficient by itself. Examples include DMARC/SPF/DKIM failures or passes, sender/Reply-To mismatch, IP/punycode/shortened URLs, link density, HTML/image structure, risky attachment extensions, upstream `X-Spam-*` evidence, urgency and promotional patterns.
 
-Never commit `.env`. It is excluded by both `.gitignore` and `.dockerignore`. `APP_SECRET` protects sessions and derives the key used to encrypt the stored IMAP password. Back it up separately. Losing/changing it makes an existing encrypted IMAP password unreadable. IMAP credentials are entered in the web UI, not committed to Git.
+This is still a local heuristic classifier, not a claim of state-of-the-art ML accuracy. Your throwaway spam mailbox is the acceptance test: inspect false negatives and false positives in the detailed scan log and tune from evidence. A future statistical classifier should be trained on labeled *email*, not only SMS data.
 
-With HTTPS at a reverse proxy, set `COOKIE_SECURE=true` and restrict `TRUSTED_HOSTS` to the public hostname. Do not expose plain HTTP to an untrusted network.
+## Logs and privacy
+The web UI stores scan metadata and a compact signal list. SQLite stores only the existing truncated preview, not complete mail bodies or attachment contents. stdout records classifier decisions but not credentials, tokens, or full bodies:
+```bash
+docker compose logs -f mailguard
+```
+The per-message web log shows UID, sender, subject, final score/result, and every rule contribution.
 
-## Mail safety
+## Safety
+- Automated classification never moves mail to Trash.
+- Review messages are not selected by default.
+- Delete requires explicit confirmation and means move to Trash.
+- No EXPUNGE implementation exists.
+- Email HTML is never rendered and external resources are never loaded.
+- Attachment contents are not downloaded for classification; only MIME/message payload handling needed for text and metadata is performed.
 
-MailGuard uses IMAP UIDs and UIDVALIDITY. Suspected mail is moved to the configured review folder. Keep returns it to the source folder. Delete moves it to Trash. Where IMAP MOVE is unavailable, the adapter copies the specific UID and applies `\Deleted` to that specific source UID; it never calls `EXPUNGE`.
-
-Email content is hostile input. The UI displays escaped text; it never renders mail HTML, downloads remote images, follows links, executes attachments, or passes email content to a shell.
-
-## Tests
-
+## Test
 ```bash
 python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 pytest -q
 ```
-
-GitHub Actions runs the tests and a Docker image build on pushes and pull requests.
-
-## Health
-
-`GET /health` verifies that the application and SQLite database are available. Remote IMAP downtime does not by itself make the Docker container unhealthy.
-
-## Repository contents
-
-```text
-app/                  application
-app/templates/        web UI
-app/static/           CSS/JavaScript
-tests/                automated tests
-.github/workflows/    GitHub CI
-Dockerfile
-docker-compose.yml
-.env.example
-.gitignore
-.dockerignore
-README.md
-```
-
-## Before production use
-
-Test against your specific IMAP provider using a non-critical mailbox first. Providers vary in MOVE, UIDPLUS, folder naming, authentication and retention behavior. Back up the Docker volume and `APP_SECRET` before upgrades.
+GitHub Actions runs pytest and a Docker build on pushes and pull requests.
