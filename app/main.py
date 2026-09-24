@@ -26,8 +26,9 @@ def render(r,n,**x):return templates.TemplateResponse(n,{'request':r,'user':user
 @app.get('/health')
 def health():
  try:
-  with db() as c:c.execute('SELECT 1');cfg=get_config(c)
-  return {'status':'ok','database':'ok','imap_configured':configured(cfg),'classifier':VERSION}
+  with db() as c:
+   c.execute('SELECT 1');cfg=get_config(c);users=c.execute('SELECT count(*) FROM users').fetchone()[0]
+  return {'status':'ok','database':'ok','imap_configured':configured(cfg),'setup_required':users==0,'classifier':VERSION}
  except:return JSONResponse({'status':'degraded'},503)
 @app.get('/setup')
 def setup_get(r:Request):
@@ -35,19 +36,29 @@ def setup_get(r:Request):
  return RedirectResponse('/login',303) if x else render(r,'setup.html')
 @app.post('/setup')
 def setup(r:Request,username:str=Form(...),password:str=Form(...),token:str=Form(...)):
+ username=username.strip()
  if not valid_csrf(r.session,token):raise HTTPException(403)
  if len(username)<3 or len(password)<12:return render(r,'setup.html',error='Use a username of 3+ and password of 12+ characters.')
  with db() as c:c.execute('INSERT INTO users(username,password_hash) VALUES(?,?)',(username,hash_password(password)));audit(c,'admin_created',actor=username)
  r.session.clear();r.session['user']=username;return RedirectResponse('/settings',303)
 @app.get('/login')
-def login_get(r:Request):return render(r,'login.html')
+def login_get(r:Request):
+ with db() as c: exists=c.execute('SELECT 1 FROM users LIMIT 1').fetchone()
+ if not exists:return RedirectResponse('/setup',303)
+ return render(r,'login.html')
 @app.post('/login')
 def login(r:Request,username:str=Form(...),password:str=Form(...),token:str=Form(...)):
+ username=username.strip()
  if not valid_csrf(r.session,token):raise HTTPException(403)
  ip=r.client.host if r.client else 'unknown'
  if not login_allowed(ip):raise HTTPException(429)
  with db() as c:x=c.execute('SELECT * FROM users WHERE username=?',(username,)).fetchone()
- if not x or not verify_password(password,x['password_hash']):login_failed(ip);return render(r,'login.html',error='Invalid credentials')
+ if not x or not verify_password(password,x['password_hash']):
+  login_failed(ip)
+  with db() as c:audit(c,'login_failed',f'username={username[:64]}',actor='anonymous',level='WARN')
+  return render(r,'login.html',error='Invalid credentials')
+ attempts.pop(ip,None)
+ with db() as c:audit(c,'login_success','',actor=username)
  r.session.clear();r.session['user']=username;return RedirectResponse('/',303)
 @app.get('/')
 def home(r:Request):

@@ -62,3 +62,32 @@ pip install -r requirements.txt
 pytest -q
 ```
 GitHub Actions runs pytest and a Docker build on pushes and pull requests.
+
+## First-run setup troubleshooting
+On a genuinely empty data volume, `/login` automatically redirects to `/setup`. `/health` reports `"setup_required": true` until an administrator exists.
+
+Docker named volumes are independent of containers. Removing/recreating the container or deleting the checkout does not necessarily delete `mailguard-data`. If `/setup` redirects to `/login`, MailGuard has found at least one administrator record in the mounted SQLite database.
+
+To deliberately reset a throwaway installation, first identify the actual Compose volume:
+```bash
+docker compose down
+docker volume ls | grep mailguard
+```
+Only after verifying the listed volume belongs to this MailGuard installation, remove it explicitly, then recreate the service:
+```bash
+docker volume rm <verified-mailguard-volume-name>
+docker compose up -d --build
+```
+This permanently removes MailGuard's local users, configuration, audit history, and scan state. It does not delete mail from IMAP, but do not run it against a volume you need to retain.
+
+## v2.1.2 hotfix
+- Fixes an `UnboundLocalError` in HTML/link metadata parsing. `urlparse` was referenced before a local import, so messages containing parsable links could fail before classification.
+- Normalizes leading/trailing whitespace in administrator usernames on setup/login.
+- Adds safe `login_success` / `login_failed` audit events without passwords or password hashes.
+- Clears the in-memory failed-login throttle after a successful login.
+- Adds safe login diagnostics:
+  ```bash
+  docker compose exec mailguard python -m app.diagnostics users
+  docker compose exec mailguard python -m app.diagnostics verify-login YOUR_USERNAME --password 'YOUR_PASSWORD'
+  ```
+  The first command lists only usernames and creation timestamps. The second prints `VALID` or `INVALID` and does not modify the account.

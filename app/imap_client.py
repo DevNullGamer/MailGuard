@@ -1,4 +1,5 @@
 import imaplib,ssl,email,re,html
+from urllib.parse import urlparse
 from email.header import decode_header,make_header
 from email.utils import parseaddr
 from .security import decrypt
@@ -20,7 +21,6 @@ def metadata(raw):
  cleaned=re.sub(r'<[^>]{0,1000}>',' ',html_body);cleaned=html.unescape(re.sub(r'\s+',' ',cleaned))[:12000]
  body=plain or cleaned;urls=(URL.findall(plain)+HREF.findall(html_body))[:100]
  shown=DISPLAY_URL.findall(cleaned);dest={re.sub(r'^www\.','',(urlparse(u).hostname or '').lower()) for u in urls if u.lower().startswith(('http://','https://'))}
- from urllib.parse import urlparse
  shown_domains={re.sub(r'^www\.','',(urlparse(u).hostname or '').lower()) for u in shown}
  mismatch=bool(shown_domains and dest and shown_domains-dest)
  auth='; '.join(dec(msg.get_all('Authentication-Results',[])))[:4000];spam='; '.join(dec(x) for h in ('X-Spam-Status','X-Spam-Flag','X-Spam','X-Microsoft-Antispam','X-Forefront-Antispam-Report') for x in msg.get_all(h,[]))[:4000]
